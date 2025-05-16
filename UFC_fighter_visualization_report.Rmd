@@ -28,11 +28,11 @@ Utilizing visualization libraries from the tidyverse ecosystem, the sf library f
 
 ```{r}
 
-ufc_data <- read.csv("datasets/chloropeth_dataset.csv")
+ufc_data <- read.csv("data/chloropeth_dataset.csv")
 
-fight_data_per_wc <- read.csv("datasets/boxplot_timeseries_stackedbars_dataset.csv")
+fight_data_per_wc <- read.csv("data/boxplot_timeseries_stackedbars_dataset.csv")
 
-gsp_data <- read.csv("datasets/lineplot_radarplot_dataset.csv")
+gsp_data <- read.csv("data/lineplot_radarplot_dataset.csv")
 
 ```
 
