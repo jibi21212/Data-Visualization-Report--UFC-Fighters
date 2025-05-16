@@ -1,0 +1,333 @@
+---
+title: "UFC Fighter Analysis: A Data-Driven Exploration of Mixed Martial Arts"
+output: html_notebook
+author: "Muhammad Jibran Khan - 100877086"
+---
+
+# Introduction
+
+This analysis investigates patterns within professional Mixed Martial Arts (MMA), specifically focusing on the Ultimate Fighting Championship (UFC). MMA’s dynamic and unpredictable nature presents unique opportunities for uncovering insights through data visualization. The visual analysis presented here serves as an initial exploration toward a larger personal project aimed at developing an interactive website featuring these visualizations and employing machine learning to gain deeper insights into fighter performance and predict fight outcomes.
+
+
+## Data and Methodology
+
+```{r}
+library(sf)
+library(ggplot2)
+library(dplyr)
+library(scales)
+library(tidyr)
+library(fmsb)
+library(rnaturalearth)
+library(rnaturalearthdata)
+```
+
+Utilizing visualization libraries from the tidyverse ecosystem, the sf library for mapping, and the fmsb library for radar charts, this analysis explores UFC data, collected via a custom web scraper and SQL queries, detailing fighter demographics, fight outcomes, and performance metrics.
+
+
+
+```{r}
+
+ufc_data <- read.csv("datasets/chloropeth_dataset.csv")
+
+fight_data_per_wc <- read.csv("datasets/boxplot_timeseries_stackedbars_dataset.csv")
+
+gsp_data <- read.csv("datasets/lineplot_radarplot_dataset.csv")
+
+```
+
+# Global Distribution of UFC roster
+
+```{r, fig.width=15, fig.height=8}
+
+world <- ne_countries(scale = "medium", returnclass = "sf")  # Load world map data
+
+# Mapping to standardize country names between datasets
+country_mapping <- c(
+    "Bosnia and Herzegovina" = "Bosnia and Herz.",
+    "Cape Verde" = "Cabo Verde",
+    "Congo, The Democratic Republic of the" = "Dem. Rep. Congo",
+    "Czech Republic" = "Czechia",
+    "England" = "United Kingdom",
+    "Holland" = "Netherlands",
+    "Northern Ireland" = "United Kingdom",
+    "Scotland" = "United Kingdom",
+    "South Korea" = "South Korea",
+    "United States" = "United States of America",
+    "Virgin Islands, U.S." = "U.S. Virgin Is.",
+    "Wales" = "United Kingdom",
+    "Myanmar" = "Myanmar",
+    "Pero" = "Peru",
+    "Russia" = "Russia",
+    "Northern Mariana Islands" = "N. Mariana Is."
+)
+
+# Summarize UFC fighter data by nationality
+ufc_summary <- ufc_data %>%
+  mutate(nationality = recode(nationality, !!!country_mapping)) %>%  # Apply mapping corrections
+  filter(nationality != "Unlisted") %>%                              # Exclude unknown nationalities
+  group_by(nationality) %>%
+  summarise(fighter_count = n()) %>%
+  mutate(
+    total_fighters = sum(fighter_count),
+    fighter_percentage = (fighter_count / total_fighters) * 100      # Calculate percentage of fighters per country
+  )
+
+# Join UFC summary data with world map data
+world_ufc <- world %>%
+  left_join(ufc_summary, by = c("name" = "nationality"))
+
+# Plot choropleth map showing UFC fighter distribution globally
+ggplot(data = world_ufc) +
+  geom_sf(aes(fill = fighter_percentage)) +                          # Fill countries based on fighter percentage
+  scale_fill_viridis_c(
+    option = "H",                                                    # Color scheme choice
+    name = "% of UFC Roster",
+    labels = scales::label_percent(scale = 1),
+    na.value = "grey90",                                             # Color for countries with no data
+    breaks = scales::pretty_breaks(n = 6)
+  ) +
+  theme_minimal() +
+  labs(
+    title = "Global Distribution of UFC Fighters",
+    subtitle = "Percentage of total UFC roster by country of origin"
+  ) +
+  theme(
+    plot.title = element_text(size = 16, face = "bold", family = "Arial"),
+    plot.subtitle = element_text(size = 12, family = "Arial"),
+    panel.background = element_rect(fill = "white", color = NA),
+    plot.background = element_rect(fill = "white", color = NA),
+    panel.grid = element_blank(),                                    # Removes distracting grid lines
+    legend.position = "right",
+    axis.text = element_blank()                                      # Hides axis text for cleaner visualization
+  )
+
+```
+
+The choropleth map reveals the geographical distribution of UFC fighters. The United States dominates participation, aligning with the UFC’s American origins. Brazil and Europe also exhibit substantial representation, highlighting distinctive regional fighter sourcing trends.
+
+# Fight Outcomes by Weight Class
+
+```{r, fig.width=15, fig.height=8}
+# Order weight classes logically from lightest to heaviest
+fight_data_per_wc$weight_class <- factor(fight_data_per_wc$weight_class,
+                            levels = c(
+                              "Strawweight",
+                              "Flyweight",
+                              "Bantamweight",
+                              "Featherweight",
+                              "Lightweight",
+                              "Welterweight",
+                              "Middleweight",
+                              "Light Heavyweight",
+                              "Heavyweight"
+                            ))
+
+# Create stacked bar chart showing finish methods across weight classes
+ko_by_wc <- ggplot(fight_data_per_wc, aes(x = weight_class, fill = finish_method)) +
+  geom_bar(position = "fill") +                                      # Display proportions (100%)
+  scale_y_continuous(labels = scales::percent_format()) +            # Format y-axis as percentage
+  scale_fill_viridis_d(option = "plasma", end = 0.8) +               # Color scheme for visual clarity
+  labs(
+    title = "Fight Outcomes Across Weight Classes",
+    x = "Weight Class",
+    y = "Proportion of Fights",
+    fill = "Finish Method"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),               # Rotate x-axis labels for readability
+    plot.title = element_text(size = 16, face = "bold"),
+    legend.position = "right"
+  )
+
+print(ko_by_wc)
+invisible()
+
+```
+The stacked bar chart examines finish methods across UFC weight classes. Heavyweight divisions disproportionately conclude via knockouts, reflecting heavier striking power. In contrast, lighter classes (Strawweight, Flyweight) more often reach decisions, due to fighters' speed, lower knockout power, and defensive agility. Interestingly, Lightweight shows elevated submission rates, potentially indicating a deeper talent pool or unique tactical tendencies. Submission rates are relatively lower at extremes (heavier divisions due to difficulty in securing takedowns; lighter divisions possibly due to defensive agility and faster reaction times making fighters harder to control effectively).
+
+# Evolution of Fight Outcomes Over Time
+
+```{r, fig.width=15, fig.height=8}
+
+# Ensure 'date' is formatted correctly
+fight_data_per_wc$date <- as.Date(fight_data_per_wc$date)
+
+# Simplify finish methods into broader categories
+fight_data_per_wc$finish_method_simple <- case_when(
+  grepl("Decision", fight_data_per_wc$finish_method) ~ "Decision",
+  grepl("KO|TKO", fight_data_per_wc$finish_method) ~ "KO/TKO",
+  fight_data_per_wc$finish_method == "Submission" ~ "Submission",
+  TRUE ~ "Other"
+)
+
+# Summarize fight outcomes yearly, calculating proportions per method
+yearly_data <- fight_data_per_wc %>%
+  mutate(year = as.numeric(format(date, "%Y"))) %>%
+  group_by(year, finish_method_simple) %>%
+  summarise(count = n(), .groups = "keep") %>%
+  group_by(year) %>%
+  mutate(proportion = count / sum(count)) %>%
+  ungroup()
+
+# Define the range of years for plotting
+min_year <- min(yearly_data$year)
+max_year <- max(yearly_data$year)
+
+# Plot time series of fight outcomes over years
+finish_methods_time_series <- ggplot(yearly_data, aes(x = year, y = proportion, color = finish_method_simple)) +
+  geom_line(linewidth = 0.2, alpha = 0.3) +                       # Light lines for general trends
+  geom_smooth(method = "loess", se = FALSE, linewidth = 1, alpha = 0.8) +  # Smooth trend lines for clarity
+  scale_color_manual(values = c(                                  # Custom colors for each finish method
+    "Decision" = "#2C3E50",
+    "KO/TKO" = "#E74C3C",
+    "Submission" = "#27AE60",
+    "Other" = "#95A5A6"
+  )) +
+  scale_y_continuous(labels = scales::percent) +                  # Display y-axis as percentages
+  labs(
+    title = "Evolution of UFC Fight Outcomes",
+    x = "Year",
+    y = "Proportion of Fights",
+    color = "Finish Method"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    legend.position = "right"
+  )
+
+print(finish_methods_time_series)
+invisible()
+
+```
+The time series analysis illustrates significant evolution in fight outcomes from 1993 to today. Initially dominated by KO/TKO finishes, the data indicates a decline in such finishes as fighters developed improved defensive skills. Decision outcomes steadily increased, signaling MMA’s maturation towards a strategically oriented sport. Submission victories rose early but have since stabilized, reflecting widespread proficiency in grappling techniques.
+
+# Timing Patterns in Fight Finishes
+
+```{r, fig.width=15, fig.height=8}
+
+# Boxplot showing detailed fight finish timings within each weight class
+boxplot_finish_timings<- ggplot(fight_data_per_wc, aes(x = weight_class, y = round_ended - (time_ended / 300))) +
+  geom_jitter(
+    color = "black",
+    width = 0.2,
+    alpha = 0.4,
+    size = 1
+  ) +  # Add jitter for individual data points
+  geom_boxplot(
+    aes(fill = weight_class),
+    color = "grey20",
+    alpha = 1,
+    outlier.shape = NA
+  ) +  # Boxplots to summarize timing distributions
+  scale_fill_viridis_d(option = "turbo", begin = 0.2, end = 0.8) +  # Distinct color palette per weight class
+  scale_y_continuous(
+    breaks = 1:5, 
+    labels = paste("Round", 1:5),             # Clearly label rounds
+    minor_breaks = seq(0.8, 5, by = 0.2)      # Detailed timing intervals
+  ) +
+  labs(
+    title = "Fight Duration Distribution (Detailed Timing) Across Weight Classes",
+    x = "Weight Class",
+    y = "Round and Finish Timing"
+  ) +
+  facet_wrap(
+    ~title_bout,
+    labeller = labeller(title_bout = c(
+      "0" = "Non-Championship Bouts", 
+      "1" = "Championship Bouts"
+    ))
+  ) +  # Separate championship vs. non-championship bouts
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),   # Improve readability of x-axis labels
+    plot.title = element_text(size = 16, face = "bold"),
+    legend.position = "none",
+    strip.text = element_text(size = 12, face = "bold")
+  )
+
+print(boxplot_finish_timings)
+invisible()
+
+
+```
+
+
+
+Boxplots highlight differences in finish timings between championship and non-championship bouts. Non-championship bouts, benefiting from larger samples, conclude earlier, mostly around rounds two and three. Conversely, championship bouts, though fewer, tend towards later rounds, reflecting cautious pacing and higher defensive capability. Heavier divisions generally experience earlier finishes from knockout potential, while lighter classes demonstrate longer durations emphasizing technical skills.
+
+# Individual Fighter Analysis - Case Study Georges St-Pierre
+
+```{r, fig.width=15, fig.height=8}
+# Summarize GSP's striking stats by round (rounds 1 to 5)
+gsp_round <- gsp_data %>% 
+  filter(round_number >= 1 & round_number <= 5) %>%
+  group_by(round_number) %>% 
+  summarise(
+    avg_total_attempted   = mean(total_attempted, na.rm = TRUE),
+    avg_clinch            = mean(clinch_attempted, na.rm = TRUE),
+    avg_ground            = mean(ground_attempted, na.rm = TRUE),
+    avg_distance          = mean(distance_attempted, na.rm = TRUE),
+    avg_leg_kicks         = mean(leg_attempted, na.rm = TRUE),
+    avg_body_shots        = mean(body_attempted, na.rm = TRUE),
+    avg_strikes_landed    = mean(total_strikes, na.rm = TRUE)
+  ) %>% 
+  ungroup()
+
+# Maximum strikes attempted by GSP across all fights (normalization factor)
+denom <- max(gsp_data$total_attempted, na.rm = TRUE)
+
+# Calculate radar metrics as percentages relative to maximum attempts
+short_range <- mean(gsp_round$avg_clinch + gsp_round$avg_ground, na.rm = TRUE) / denom * 100  # clinch + ground
+long_range  <- mean(gsp_round$avg_distance, na.rm = TRUE) / denom * 100                       # distance striking
+tactical    <- mean(gsp_round$avg_leg_kicks + gsp_round$avg_body_shots, na.rm = TRUE) / denom * 100  # leg/body strikes
+accuracy    <- mean(gsp_round$avg_strikes_landed / gsp_round$avg_total_attempted, na.rm = TRUE) * 100 # landing accuracy
+volume      <- mean(gsp_round$avg_total_attempted / denom, na.rm = TRUE) * 100                # relative striking volume
+
+# Prepare data frame for radar chart plotting (fmsb format)
+max_norm <- data.frame(ShortRange = 100, LongRange = 100, Tactical = 100, Accuracy = 100, Volume = 100)
+min_norm <- data.frame(ShortRange = 0,   LongRange = 0,   Tactical = 0,   Accuracy = 0,   Volume = 0)
+radar_vals <- data.frame(
+  ShortRange  = short_range,
+  LongRange   = long_range,
+  Tactical    = tactical,
+  Accuracy    = accuracy,
+  Volume      = volume
+)
+radar_data <- rbind(max_norm, min_norm, radar_vals)
+
+# Plot radar chart showing GSP's striking style breakdown
+capture.output(
+  radarchart(
+    radar_data,
+    axistype = 1,
+    seg = 5,
+    pcol = "darkblue",
+    pfcol = scales::alpha("darkblue", 0.3),
+    plwd = 2,
+    cglcol = "grey",
+    cglty = 1,
+    axislabcol = "grey",
+    caxislabels = seq(0, 100, 10),
+    title = "GSP Striking Breakdown (Relative Percentages)"
+  )
+)
+
+```
+
+Lastly, the radar chart offers a detailed striking breakdown of Georges St-Pierre (GSP), capturing his fighting style through metrics of Volume, Accuracy, Tactical striking, Short Range, and Long Range approaches. GSP's exceptional accuracy and controlled pacing reveal a strategic, methodical fighter, emphasizing efficiency over aggression, providing insights into fighter comparisons and tactical evaluation.
+  
+# References
+
+I used my custom webscraper at: https://github.com/jibi21212/UFC_web_scraper 
+
+I scraped from 2 websites: 
+
+Nationality:
+https://www.sherdog.com
+
+Every other stat:
+http://www.ufcstats.com/statistics/fighters?char=a&page=all
+
